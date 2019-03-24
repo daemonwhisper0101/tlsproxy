@@ -20,6 +20,20 @@ func NewProxySite() (*ProxySite, error) {
   return &ProxySite{ Jar: jar }, nil
 }
 
+func (ps *ProxySite)Process(query string) ([]byte, error) {
+  cl := &http.Client{ Jar: ps.Jar }
+  resp, err := cl.Get("https://us1.proxysite.com" + query)
+  if err != nil {
+    return nil, err
+  }
+  defer resp.Body.Close()
+  body, err := ioutil.ReadAll(resp.Body)
+  if err != nil {
+    return nil, err
+  }
+  return body, nil
+}
+
 func (ps *ProxySite)Get(url string) ([]byte, error) {
   cl := &http.Client{ Jar: ps.Jar }
   data := neturl.Values{}
