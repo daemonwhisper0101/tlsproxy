@@ -162,7 +162,7 @@ func (c *HttpConnection)Get(uri string, reqhdr []string) ([]byte, error) {
     index := bytes.Index(buf[:n], []byte("\r\n\r\n"))
     if index >= 0 {
       hdr += string(buf[:index])
-      body = buf[index+2:n]
+      body = buf[index+4:n]
       break
     }
     hdr += string(buf[:n])
