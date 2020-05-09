@@ -2,12 +2,17 @@
 package hidester
 
 import (
+  "bytes"
+  "crypto/tls"
+  "errors"
   "log"
   "io/ioutil"
+  "net"
   "net/http"
   "net/http/cookiejar"
   neturl "net/url"
-  //"strings"
+  "strconv"
+  "strings"
 )
 
 type Hidester struct {
@@ -37,7 +42,7 @@ func (hs *Hidester)dbgf(f string, a ...interface{}) {
   }
 }
 
-func (hs *Hidester)Get(url string) ([]byte, error) {
+func (hs *Hidester)Get_old(url string) ([]byte, error) {
   cl := &http.Client{ Jar: hs.Jar }
 
   query := "https://us.hidester.com/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
@@ -56,7 +61,7 @@ func (hs *Hidester)Get(url string) ([]byte, error) {
   return body, nil
 }
 
-func (hs *Hidester)GetWithReferer(url, referer string) ([]byte, error) {
+func (hs *Hidester)GetWithReferer_old(url, referer string) ([]byte, error) {
   cl := &http.Client{ Jar: hs.Jar }
 
   query := "https://us.hidester.com/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
@@ -71,6 +76,189 @@ func (hs *Hidester)GetWithReferer(url, referer string) ([]byte, error) {
   defer resp.Body.Close()
   if err != nil {
     return nil, err
+  }
+  return body, nil
+}
+
+func (hs *Hidester)Get(url string) ([]byte, error) {
+  c := &HttpConnection{}
+  if err := c.Open("us.hidester.com"); err != nil {
+    return nil, err
+  }
+
+  path := "/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
+  reqhdr := []string{"Referer: https://us.hidester.com/proxy.php"}
+  body, err := c.Get(path, reqhdr)
+  if err != nil {
+    return nil, err
+  }
+  return body, nil
+}
+
+func (hs *Hidester)GetWithReferer(url, referer string) ([]byte, error) {
+  c := &HttpConnection{}
+  if err := c.Open("us.hidester.com"); err != nil {
+    return nil, err
+  }
+
+  path := "/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
+  reqhdr := []string{"Referer: https://us.hidester.com/proxy.php?u=" + neturl.QueryEscape(referer) + "&b=2"}
+  body, err := c.Get(path, reqhdr)
+  if err != nil {
+    return nil, err
+  }
+  return body, nil
+}
+
+type HttpConnection struct {
+  State int
+  host string
+  conn net.Conn
+}
+
+func (c *HttpConnection)Open(host string) error {
+  c.State = 0
+  // https only
+  conf := &tls.Config{ InsecureSkipVerify: true }
+  conn, err := tls.Dial("tcp", host + ":443", conf)
+  if err != nil {
+    c.host = ""
+    return err
+  }
+  c.conn = conn
+  c.host = host
+  c.State = 1
+  return nil
+}
+
+func (c *HttpConnection)Get(uri string, reqhdr []string) ([]byte, error) {
+  // need check connection is ok
+  if c.host == "" {
+    return nil, errors.New("invalid connection")
+  }
+  req := "GET " + uri + " HTTP/1.1\r\n"
+  req += strings.Join(reqhdr, "\r\n") + "\r\n"
+  req += "Host: " + c.host + "\r\n"
+  req += "Connection: Keep-Alive\r\n"
+  req += "\r\n"
+  //log.Println(req)
+  if _, err := c.conn.Write([]byte(req)); err != nil {
+    c.conn.Close()
+    c.host = ""
+    return nil, err
+  }
+  // get Response Header
+  hdr := ""
+  body := []byte{}
+  for {
+    buf := make([]byte, 1024)
+    n, err := c.conn.Read(buf)
+    if err != nil {
+      // connection close?
+      c.conn.Close()
+      c.host = ""
+      return nil, err
+    }
+    index := bytes.Index(buf[:n], []byte("\r\n\r\n"))
+    if index >= 0 {
+      hdr += string(buf[:index])
+      body = buf[index+2:n]
+      break
+    }
+    hdr += string(buf[:n])
+  }
+  //log.Println(hdr)
+  // headers
+  headers := strings.Split(hdr, "\r\n")
+  length := 0
+  for _, header := range(headers) {
+    if strings.Index(header, "Location: ") == 0 {
+      // 302
+      u, err := neturl.Parse(header[10:])
+      if err != nil {
+	// bad location
+	c.conn.Close()
+	c.host = ""
+	return nil, err
+      }
+      // assume no content
+      path := u.Path
+      if path[0] != '/' {
+	path = "/" + path
+      }
+      return c.Get(path, reqhdr)
+    }
+    if strings.Index(header, "Content-Length: ") == 0 {
+      length, _ = strconv.Atoi(header[16:])
+      // ignore error
+    }
+    if strings.Index(header, "Transfer-Encoding: chunked") == 0 {
+      // goto chunked mode
+      body, err := c.Chunked()
+      if err != nil {
+	c.conn.Close()
+	c.host = ""
+	return nil, err
+      }
+      return body, nil
+    }
+  }
+  for len(body) < length {
+    buf := make([]byte, length)
+    n, err := c.conn.Read(buf)
+    if err != nil {
+      // connection close?
+      c.conn.Close()
+      c.host = ""
+      return nil, err
+    }
+    body = append(body[:], buf[:n]...)
+  }
+  return body, nil
+}
+
+func (c *HttpConnection)Chunked() ([]byte, error) {
+  body := []byte{}
+  for {
+    sz := 0
+    for {
+      buf := make([]byte, 1)
+      n, err := c.conn.Read(buf)
+      if n != 1 {
+	if err != nil {
+	  return nil, err
+	}
+	return nil, errors.New("size error")
+      }
+      if buf[0] == 13 { // \r
+	c.conn.Read(buf) // \n
+	break
+      }
+      sz *= 16
+      if buf[0] <= '9' {
+	sz += int(buf[0] - 0x30)
+      } else if buf[0] <= 'F' {
+	sz += int(buf[0] - 'A' + 10)
+      } else if buf[0] <= 'f' {
+	sz += int(buf[0] - 'a' + 10)
+      }
+    }
+    if sz == 0 {
+      dbuf := make([]byte, 2)
+      c.conn.Read(dbuf)
+      break
+    }
+    //log.Printf("chunk %d\n", sz)
+    rd := 0
+    for rd != sz {
+      cbuf := make([]byte, sz)
+      n, _ := c.conn.Read(cbuf)
+      rd += n
+      //log.Printf("read chunk %d/%d\n", rd, sz)
+      body = append(body, cbuf[:n]...)
+    }
+    dbuf := make([]byte, 2)
+    c.conn.Read(dbuf)
   }
   return body, nil
 }
