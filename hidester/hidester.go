@@ -40,17 +40,14 @@ func (hs *Hidester)dbgf(f string, a ...interface{}) {
 func (hs *Hidester)Get(url string) ([]byte, error) {
   cl := &http.Client{ Jar: hs.Jar }
 
-  data := neturl.Values{}
-  data.Set("langsel", "en")
-  data.Set("u", url)
-  data.Set("allowCookies", "on")
-  data.Set("stripJS", "on")
-  hs.dbgln(data)
-  resp, err := cl.PostForm("https://us.hidester.com/do.php?action=go", data)
+  query := "https://us.hidester.com/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
+  req, err := http.NewRequest("GET", query, nil)
+  req.Header.Add("Referer", "https://us.hidester.com/proxy.php")
+  resp, err := cl.Do(req)
   if err != nil {
     return nil, err
   }
-  hs.dbgln(hs.Jar)
+  hs.dbgln(resp)
   defer resp.Body.Close()
   body, err := ioutil.ReadAll(resp.Body)
   if err != nil {
