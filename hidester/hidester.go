@@ -102,6 +102,7 @@ func (hs *Hidester)Get(url string) ([]byte, error) {
   body, err := hs.Conn.Get(path, reqhdr)
   if err != nil {
     // reopen
+    hs.ConnReady = false
     go func() {
       ready := hs.Conn.Open("us.hidester.com")
       <-ready
@@ -122,6 +123,7 @@ func (hs *Hidester)GetWithReferer(url, referer string) ([]byte, error) {
   body, err := hs.Conn.Get(path, reqhdr)
   if err != nil {
     // reopen
+    hs.ConnReady = false
     go func() {
       ready := hs.Conn.Open("us.hidester.com")
       <-ready
