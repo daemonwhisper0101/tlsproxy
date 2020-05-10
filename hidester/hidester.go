@@ -13,11 +13,14 @@ import (
   neturl "net/url"
   "strconv"
   "strings"
+  "time"
 )
 
 type Hidester struct {
   Jar *cookiejar.Jar
   LastURL string
+  Conn HttpConnection
+  ConnReady bool
   //
   Debug bool
 }
@@ -27,7 +30,16 @@ func NewHidester() (*Hidester, error) {
   if err != nil {
     return nil, err
   }
-  return &Hidester{ Jar: jar, Debug: false }, nil
+  h := &Hidester{ Jar: jar, Debug: false }
+  // start connection
+  h.Conn = HttpConnection{}
+  h.ConnReady = false
+  go func() {
+    ready := h.Conn.Open("us.hidester.com")
+    <-ready
+    h.ConnReady = true
+  }()
+  return h, nil
 }
 
 func (hs *Hidester)dbgln(a ...interface{}) {
@@ -81,30 +93,40 @@ func (hs *Hidester)GetWithReferer_old(url, referer string) ([]byte, error) {
 }
 
 func (hs *Hidester)Get(url string) ([]byte, error) {
-  c := &HttpConnection{}
-  if err := c.Open("us.hidester.com"); err != nil {
-    return nil, err
+  for hs.ConnReady == false {
+    time.Sleep(time.Millisecond * 100)
   }
 
   path := "/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
   reqhdr := []string{"Referer: https://us.hidester.com/proxy.php"}
-  body, err := c.Get(path, reqhdr)
+  body, err := hs.Conn.Get(path, reqhdr)
   if err != nil {
+    // reopen
+    go func() {
+      ready := hs.Conn.Open("us.hidester.com")
+      <-ready
+      hs.ConnReady = true
+    }()
     return nil, err
   }
   return body, nil
 }
 
 func (hs *Hidester)GetWithReferer(url, referer string) ([]byte, error) {
-  c := &HttpConnection{}
-  if err := c.Open("us.hidester.com"); err != nil {
-    return nil, err
+  for hs.ConnReady == false {
+    time.Sleep(time.Millisecond * 100)
   }
 
   path := "/proxy.php?u=" + neturl.QueryEscape(url) + "&b=2"
   reqhdr := []string{"Referer: https://us.hidester.com/proxy.php?u=" + neturl.QueryEscape(referer) + "&b=2"}
-  body, err := c.Get(path, reqhdr)
+  body, err := hs.Conn.Get(path, reqhdr)
   if err != nil {
+    // reopen
+    go func() {
+      ready := hs.Conn.Open("us.hidester.com")
+      <-ready
+      hs.ConnReady = true
+    }()
     return nil, err
   }
   return body, nil
@@ -114,21 +136,27 @@ type HttpConnection struct {
   State int
   host string
   conn net.Conn
+  lasterr error
 }
 
-func (c *HttpConnection)Open(host string) error {
+func (c *HttpConnection)Open(host string) chan bool {
+  ready := make(chan bool)
   c.State = 0
-  // https only
-  conf := &tls.Config{ InsecureSkipVerify: true }
-  conn, err := tls.Dial("tcp", host + ":443", conf)
-  if err != nil {
-    c.host = ""
-    return err
-  }
-  c.conn = conn
-  c.host = host
-  c.State = 1
-  return nil
+  go func() {
+    defer func() { ready <- true }()
+    // https only
+    conf := &tls.Config{ InsecureSkipVerify: true }
+    conn, err := tls.Dial("tcp", host + ":443", conf)
+    if err != nil {
+      c.lasterr = err
+      c.host = ""
+      return
+    }
+    c.conn = conn
+    c.host = host
+    c.State = 1
+  }()
+  return ready
 }
 
 func (c *HttpConnection)Get(uri string, reqhdr []string) ([]byte, error) {
