@@ -235,7 +235,7 @@ func (c *HttpConnection)Get(uri string, reqhdr []string) ([]byte, error) {
   }
   for len(body) < length {
     buf := make([]byte, length)
-    n, err := c.conn.Read(buf)
+    n, err := c.ReadWithTimeout(buf, 10 * time.Second)
     if err != nil {
       // connection close?
       c.conn.Close()
@@ -291,4 +291,21 @@ func (c *HttpConnection)Chunked() ([]byte, error) {
     c.conn.Read(dbuf)
   }
   return body, nil
+}
+
+func (c *HttpConnection)ReadWithTimeout(b []byte, d time.Duration) (n int, err error) {
+  // set default return
+  n = 0
+  err = nil
+  ch := make(chan bool)
+  go func() {
+    n, err = c.conn.Read(b)
+    ch <- true
+  }()
+  select {
+  case <- ch: return
+  case <- time.After(d): break
+  }
+  err = errors.New("read timeout")
+  return
 }
