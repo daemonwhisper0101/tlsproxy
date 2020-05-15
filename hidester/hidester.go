@@ -182,7 +182,7 @@ func (c *HttpConnection)Get(uri string, reqhdr []string) ([]byte, error) {
   body := []byte{}
   for {
     buf := make([]byte, 1024)
-    n, err := c.conn.Read(buf)
+    n, err := c.ReadWithTimeout(buf, 30 * time.Second)
     if err != nil {
       // connection close?
       c.conn.Close()
