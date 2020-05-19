@@ -46,6 +46,25 @@ func (hs *Hidester)dbgf(f string, a ...interface{}) {
   }
 }
 
+func (hs *Hidester)Process(query string) ([]byte, error) {
+  for hs.ConnReady == false {
+    time.Sleep(time.Millisecond * 100)
+  }
+  reqhdr := []string{"Referer: https://us.hidester.com/proxy.php"}
+  body, err := hs.Conn.Get(query, reqhdr)
+  if err != nil {
+    // reopen
+    hs.ConnReady = false
+    go func() {
+      ready := hs.Conn.Open("us.hidester.com")
+      <-ready
+      hs.ConnReady = true
+    }()
+    return nil, err
+  }
+  return body, nil
+}
+
 func (hs *Hidester)Get(url string) ([]byte, error) {
   for hs.ConnReady == false {
     time.Sleep(time.Millisecond * 100)
