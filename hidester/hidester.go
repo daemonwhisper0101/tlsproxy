@@ -13,18 +13,37 @@ import (
   "time"
 )
 
+type Dialer func(string, string) (net.Conn, error)
+
 type Hidester struct {
   LastURL string
   Conn HttpConnection
   ConnReady bool
   //
   Debug bool
+  dialer Dialer
 }
 
 func NewHidester() (*Hidester, error) {
   h := &Hidester{ Debug: false }
   // start connection
   h.Conn = HttpConnection{}
+  h.ConnReady = false
+  go func() {
+    ready := h.Conn.Open("us.hidester.com")
+    <-ready
+    h.ConnReady = true
+  }()
+  return h, nil
+}
+
+func NewHidesterWithDialer(dialer Dialer) (*Hidester, error) {
+  h := &Hidester{ Debug: false }
+  // start connection
+  h.Conn = HttpConnection{
+    // set custom dialer
+    dialer: dialer,
+  }
   h.ConnReady = false
   go func() {
     ready := h.Conn.Open("us.hidester.com")
@@ -112,6 +131,7 @@ type HttpConnection struct {
   host string
   conn net.Conn
   lasterr error
+  dialer Dialer
 }
 
 func (c *HttpConnection)Open(host string) chan bool {
@@ -119,9 +139,18 @@ func (c *HttpConnection)Open(host string) chan bool {
   c.State = 0
   go func() {
     defer func() { ready <- true }()
+    if c.dialer == nil {
+      c.dialer = net.Dial
+    }
+    rawconn, err := c.dialer("tcp", host + ":443")
+    if err != nil {
+      c.lasterr = err
+      c.host = ""
+      return
+    }
     // https only
     conf := &tls.Config{ InsecureSkipVerify: true }
-    conn, err := tls.Dial("tcp", host + ":443", conf)
+    conn := tls.Client(rawconn, conf)
     if err != nil {
       c.lasterr = err
       c.host = ""
